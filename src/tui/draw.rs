@@ -303,10 +303,15 @@ impl View {
         if self.files.is_empty() {
             let text = if self.loading {
                 "Loading Drive…"
-            } else if self.filter.is_empty() {
-                "This folder is empty · a creates, u uploads"
-            } else {
+            } else if !self.filter.is_empty() {
                 "Nothing matches the filter · Esc clears it"
+            } else {
+                match self.folder() {
+                    "drives" => "No Shared Drives · Tab switches views",
+                    "shared" => "Nothing shared with this account · Tab switches views",
+                    "root" => "This folder is empty · a creates, u uploads · Tab switches views",
+                    _ => "This folder is empty · a creates, u uploads",
+                }
             };
             frame.render_widget(Paragraph::new(format!("  {text}")).fg(DIM), area);
             return;
@@ -675,6 +680,7 @@ const KEYS: &[(&str, &[(&str, &str)])] = &[
             ("j/k ↑/↓", "Move"),
             ("l/→ Enter", "Open folder"),
             ("h/← Bksp", "Parent folder"),
+            ("Tab", "My Drive / Shared / Drives"),
             ("g/G", "Top / bottom"),
             ("^d/^u PgDn", "Half page / page"),
             ("/", "Filter this folder"),

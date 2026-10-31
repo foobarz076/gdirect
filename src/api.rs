@@ -269,7 +269,7 @@ impl Api {
     /// token endpoint, falls back to the system-proxy route.
     fn refresh_pinned(&self, credentials: &crate::auth::Credentials) -> Result<crate::auth::Token> {
         if self.route().0.is_some() {
-            let form = credentials.refresh_form();
+            let form = credentials.refresh_form()?;
             let reply = self
                 .deliver_to(TOKEN_HOST, |client, forged| {
                     client
@@ -310,19 +310,25 @@ impl Api {
         reauth: bool,
         client: Option<&Path>,
         import: Option<&Path>,
+        subject: Option<&str>,
     ) -> Result<String> {
         let db = Store::open(&self.db)?;
-        let credentials =
-            crate::auth::prepare_login(&db, self.account.as_deref(), client, import, reauth)?;
+        let credentials = crate::auth::prepare_login(
+            &db,
+            self.account.as_deref(),
+            client,
+            import,
+            subject,
+            reauth,
+        )?;
         let token = crate::auth::refresh(&credentials)?;
-        // Whichever account was chosen in the browser is added (or updated) and becomes the default.
+        // Whichever account was chosen in the browser (or service account / subject) is added and becomes the default.
         let email = self.account_for_token(&token.access_token)?;
         db.save_account(&email, &serde_json::to_string(&credentials)?)?;
-        if client.is_some() {
-            db.set(
-                "oauth_client",
-                &serde_json::to_string(&credentials.client())?,
-            )?;
+        if client.is_some()
+            && let Ok(oauth_client) = credentials.client()
+        {
+            db.set("oauth_client", &serde_json::to_string(&oauth_client)?)?;
         }
         db.save_token(&email, &token.access_token, token.expires_in)?;
         db.set_default_account(&email)?;
@@ -377,6 +383,10 @@ impl Api {
     /// Creates an empty file, or a folder when `folder` is set.
     pub fn create(&self, parent: &str, name: &str, folder: bool) -> Result<File> {
         ensure!(crate::drive::valid_id(parent), "invalid folder ID");
+        ensure!(
+            !matches!(parent, "drives" | "shared"),
+            "open a folder or Shared Drive first"
+        );
         let mut body = serde_json::json!({"name": checked_name(name)?, "parents": [parent]});
         if folder {
             body["mimeType"] = "application/vnd.google-apps.folder".into();
@@ -400,6 +410,10 @@ impl Api {
             crate::drive::valid_id(id) && crate::drive::valid_id(parent),
             "invalid file ID"
         );
+        ensure!(
+            !matches!(parent, "drives" | "shared"),
+            "open a folder or Shared Drive first"
+        );
         let body = serde_json::json!({"parents": [parent]});
         self.write(
             reqwest::Method::POST,
@@ -414,6 +428,10 @@ impl Api {
         ensure!(
             crate::drive::valid_id(id) && crate::drive::valid_id(parent),
             "invalid file ID"
+        );
+        ensure!(
+            !matches!(parent, "drives" | "shared"),
+            "open a folder or Shared Drive first"
         );
         let data = self.get(
             &format!("files/{id}"),
@@ -448,10 +466,28 @@ impl Api {
     }
     pub fn list(&self, folder: &str) -> Result<Vec<File>> {
         ensure!(crate::drive::valid_id(folder), "invalid folder ID");
+        let files = if folder == "drives" {
+            self.list_drives()?
+        } else {
+            let q = if folder == "shared" {
+                "sharedWithMe = true and trashed = false".to_owned()
+            } else {
+                format!("'{folder}' in parents and trashed = false")
+            };
+            self.list_files(&q)?
+        };
+        Store::open(&self.db)?.cache(
+            self.account.as_deref().unwrap_or_default(),
+            folder,
+            &serde_json::to_string(&files)?,
+        )?;
+        Ok(files)
+    }
+    fn list_files(&self, q: &str) -> Result<Vec<File>> {
         let mut files = Vec::new();
         let mut page = String::new();
         loop {
-            let mut query=vec![("q".into(),format!("'{folder}' in parents and trashed = false")),
+            let mut query=vec![("q".into(),q.to_owned()),
                 ("fields".into(),"nextPageToken,files(id,name,mimeType,size,modifiedTime,md5Checksum,resourceKey)".into()),
                 ("pageSize".into(),"1000".into()),("orderBy".into(),"folder,name_natural".into()),
                 ("supportsAllDrives".into(),"true".into()),("includeItemsFromAllDrives".into(),"true".into())];
@@ -468,12 +504,44 @@ impl Api {
                 break;
             }
         }
-        Store::open(&self.db)?.cache(
-            self.account.as_deref().unwrap_or_default(),
-            folder,
-            &serde_json::to_string(&files)?,
-        )?;
         Ok(files)
+    }
+    fn list_drives(&self) -> Result<Vec<File>> {
+        #[derive(Deserialize)]
+        struct DriveItem {
+            id: String,
+            name: String,
+        }
+        let mut drives = Vec::new();
+        let mut page = String::new();
+        loop {
+            let mut query = vec![
+                ("fields".into(), "nextPageToken,drives(id,name)".into()),
+                ("pageSize".into(), "100".into()),
+            ];
+            if !page.is_empty() {
+                query.push(("pageToken".into(), page));
+            }
+            let data = self.get("drives", &query)?;
+            let items: Vec<DriveItem> = serde_json::from_value(data["drives"].clone())?;
+            drives.extend(items.into_iter().map(|d| File {
+                id: d.id,
+                name: d.name,
+                mime_type: "application/vnd.google-apps.folder".into(),
+                size: None,
+                modified_time: None,
+                md5_checksum: None,
+                resource_key: None,
+            }));
+            page = data["nextPageToken"]
+                .as_str()
+                .unwrap_or_default()
+                .to_owned();
+            if page.is_empty() {
+                break;
+            }
+        }
+        Ok(drives)
     }
     pub fn metadata(&self, id: &str) -> Result<File> {
         let id = crate::drive::FileRef::parse(id)?.id;
@@ -649,5 +717,14 @@ mod tests {
     fn names_cannot_escape() {
         assert_eq!(safe_name("../a\n"), ".._a_");
         assert_eq!(safe_name(".."), "download");
+    }
+    #[test]
+    fn virtual_views_reject_writes() {
+        let api = Api::new(PathBuf::from("unused.sqlite3"), None, None, None, false).unwrap();
+        for view in ["drives", "shared"] {
+            assert!(api.create(view, "x", false).is_err());
+            assert!(api.copy("file1", view).is_err());
+            assert!(api.move_to("file1", view).is_err());
+        }
     }
 }

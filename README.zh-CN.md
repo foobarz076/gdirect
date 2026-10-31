@@ -104,6 +104,7 @@ gdirect upload ./file.zip --parent FOLDER_ID --name backup.zip
 | `Ctrl-d/Ctrl-u`、PgDn/PgUp | 向下或向上翻半页 / 一页 |
 | Enter、`l/→` | 进入文件夹 |
 | `h/←`、Backspace | 返回上级 |
+| `Tab` | 在 `My Drive`、`Shared Drives`（共享云端硬盘）和 `Shared with me`（与我共享）之间切换 |
 | `/` | 按名称筛选当前文件夹。Enter 保留筛选，Esc 清除 |
 | `Ctrl-r`、F5 | 刷新 |
 | 空格 | 标记或取消标记；切换文件夹后标记仍保留 |
@@ -148,6 +149,8 @@ gdirect upload ./file.zip --parent FOLDER_ID --name backup.zip
 
 ```sh
 gdirect login --add                # 在浏览器里选择另一个账号
+gdirect login --credentials sa.json                        # 使用 Service Account JSON 登录
+gdirect login --credentials sa.json --subject me@corp.com  # Service Account + 域内委派（Impersonation）
 gdirect accounts                   # * 表示默认账号
 gdirect switch work                # 把 work@… 设为默认账号
 gdirect -a me@gmail.com browse     # 只在这一条命令里使用某个账号

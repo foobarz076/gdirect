@@ -94,6 +94,7 @@ gdirect upload ./file.zip --parent FOLDER_ID --name backup.zip
 | `Ctrl-d/Ctrl-u`, PgDn/PgUp | Half a page / a page down or up |
 | Enter, `l/→` | Open folder |
 | `h/←`, Backspace | Parent folder |
+| `Tab` | Switch between `My Drive`, `Shared Drives` and `Shared with me` |
 | `/` | Filter the current folder by name. Enter keeps the filter, Esc clears it |
 | `Ctrl-r`, F5 | Refresh |
 | Space | Mark or unmark an item. Marks are kept when you change folders |
@@ -137,6 +138,8 @@ Sign in to more Google accounts with the same OAuth client:
 
 ```sh
 gdirect login --add                # choose another account in the browser
+gdirect login --credentials sa.json                        # service account JSON
+gdirect login --credentials sa.json --subject me@corp.com  # service account with Domain-Wide Delegation
 gdirect accounts                   # * marks the default account
 gdirect switch work                # make work@… the default
 gdirect -a me@gmail.com browse     # use one account for a single command

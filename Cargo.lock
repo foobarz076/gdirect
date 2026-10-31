@@ -621,6 +621,7 @@ dependencies = [
  "md-5",
  "ratatui",
  "reqwest",
+ "ring",
  "rusqlite",
  "scraper",
  "serde",

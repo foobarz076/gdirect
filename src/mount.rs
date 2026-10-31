@@ -22,10 +22,17 @@ fn default_mount() -> Result<PathBuf> {
 pub fn run(
     api: &Api,
     path: Option<&Path>,
+    drive: Option<&str>,
     read_only: bool,
     foreground: bool,
     connections: u8,
 ) -> Result<()> {
+    if let Some(drive) = drive {
+        ensure!(
+            crate::drive::valid_id(drive) && !matches!(drive, "root" | "drives" | "shared"),
+            "invalid Shared Drive ID"
+        );
+    }
     let version = Command::new("rclone")
         .arg("version")
         .output()
@@ -112,7 +119,12 @@ pub fn run(
     let credentials = state.join("credentials.json");
     crate::auth::export_credentials(&credentials_data, &credentials)?;
     let config = state.join("rclone.conf");
-    fs::write(&config, "[gdirect]\ntype = drive\nenv_auth = true\n")?;
+    let conf = if credentials_data.is_service_account() {
+        "[gdirect]\ntype = drive\n"
+    } else {
+        "[gdirect]\ntype = drive\nenv_auth = true\n"
+    };
+    fs::write(&config, conf)?;
     let log = state.join("rclone.log");
     #[cfg(unix)]
     let mut command = {
@@ -161,6 +173,17 @@ pub fn run(
         .arg("--log-file")
         .arg(&log)
         .args(["--log-level", "INFO"]);
+    if credentials_data.is_service_account() {
+        command
+            .arg("--drive-service-account-file")
+            .arg(&credentials);
+        if let Some(subject) = credentials_data.subject() {
+            command.arg("--drive-impersonate").arg(subject);
+        }
+    }
+    if let Some(drive) = drive {
+        command.arg("--drive-team-drive").arg(drive);
+    }
     if read_only {
         command.arg("--read-only");
     }

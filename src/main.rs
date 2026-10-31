@@ -81,7 +81,7 @@ enum Commands {
         #[arg(long)]
         list: bool,
     },
-    /// Sign in with a Google Desktop OAuth client JSON; signing in again adds another account
+    /// Sign in with a Google Desktop OAuth client or service account JSON; signing in again adds another account
     Login {
         /// Sign in in the browser using the saved OAuth client; the account you
         /// choose there is added (or renewed) and becomes the default
@@ -90,9 +90,12 @@ enum Commands {
         /// Google Desktop OAuth client JSON (opens browser)
         #[arg(long, conflicts_with = "credentials")]
         client_secret: Option<PathBuf>,
-        /// Import existing authorized_user credentials JSON (e.g. on a headless server)
+        /// Import authorized_user or service_account credentials JSON
         #[arg(long, conflicts_with = "reauth")]
         credentials: Option<PathBuf>,
+        /// User email to impersonate with a service account (Domain-Wide Delegation)
+        #[arg(long, requires = "credentials")]
+        subject: Option<String>,
     },
     /// Remove an account's saved credentials (default: the default account); scanned IPs are kept
     Logout {
@@ -111,7 +114,7 @@ enum Commands {
     },
     /// Browse and manage folders; ? lists the keys (d download, a create, r rename, D trash)
     Browse {
-        /// Folder ID to open
+        /// Folder ID to open (or: root, drives, shared)
         #[arg(default_value = "root")]
         folder: String,
         /// Download directory
@@ -122,7 +125,7 @@ enum Commands {
     },
     /// List a Drive folder
     Ls {
-        /// Folder ID to list
+        /// Folder ID to list (or: root, drives, shared)
         #[arg(default_value = "root")]
         folder: String,
         /// Print JSON instead of tab-separated columns
@@ -135,6 +138,9 @@ enum Commands {
     Mount {
         /// Mount directory (default: ~/GoogleDrive)
         path: Option<PathBuf>,
+        /// Shared Drive ID to mount instead of My Drive
+        #[arg(long)]
+        drive: Option<String>,
         /// Mount without write access
         #[arg(long)]
         read_only: bool,
@@ -293,18 +299,27 @@ fn run(cli: Cli) -> Result<()> {
         }
         Commands::Mount {
             path,
+            drive,
             read_only,
             foreground,
             connections,
         } => {
             let api = api::Api::new(db_path, account()?, None, None, false)?;
             let connections = connections.unwrap_or_else(saved);
-            mount::run(&api, path.as_deref(), read_only, foreground, connections)?;
+            mount::run(
+                &api,
+                path.as_deref(),
+                drive.as_deref(),
+                read_only,
+                foreground,
+                connections,
+            )?;
         }
         Commands::Login {
             reauth,
             client_secret,
             credentials,
+            subject,
         } => {
             // The very first login has no account to pick yet.
             let current = if db.accounts()?.is_empty() {
@@ -313,7 +328,12 @@ fn run(cli: Cli) -> Result<()> {
                 account()?
             };
             let api = api::Api::new(db_path, current, None, None, false)?;
-            let email = api.login(reauth, client_secret.as_deref(), credentials.as_deref())?;
+            let email = api.login(
+                reauth,
+                client_secret.as_deref(),
+                credentials.as_deref(),
+                subject.as_deref(),
+            )?;
             println!(
                 "Logged in: {email} (default account)\nSQLite: {}",
                 api.db.display()
@@ -527,6 +547,9 @@ mod tests {
         ));
         assert!(parse(&["logout", "a@example.com", "--all"]).is_err());
         assert!(parse(&["login", "--add"]).is_ok());
+        assert!(parse(&["login", "--credentials", "sa.json", "--subject", "a@b.com"]).is_ok());
+        assert!(parse(&["login", "--subject", "a@b.com"]).is_err());
+        assert!(parse(&["mount", "--drive", "0A123"]).is_ok());
         let cli = parse(&["ls", "-a", "work"]).unwrap();
         assert_eq!(cli.account.as_deref(), Some("work"));
         assert!(parse(&["switch"]).is_err());

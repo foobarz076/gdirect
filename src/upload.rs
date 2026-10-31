@@ -71,6 +71,10 @@ impl Api {
             .context("file name must be UTF-8; use --name")?;
         ensure!(!name.is_empty(), "file name cannot be empty");
         ensure!(crate::drive::valid_id(parent), "invalid parent folder ID");
+        ensure!(
+            !matches!(parent, "drives" | "shared"),
+            "open a folder or Shared Drive first"
+        );
         let db = Store::open(&self.db)?;
         let key = Store::upload_key(
             self.account.as_deref().unwrap_or_default(),

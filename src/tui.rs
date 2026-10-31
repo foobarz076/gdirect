@@ -21,6 +21,16 @@ use std::{
     time::{Duration, Instant},
 };
 
+const ROOTS: &[(&str, &str)] = &[
+    ("root", "My Drive"),
+    ("drives", "Shared Drives"),
+    ("shared", "Shared with me"),
+];
+fn root_title(folder: &str) -> Option<&'static str> {
+    ROOTS
+        .iter()
+        .find_map(|(id, title)| (*id == folder).then_some(*title))
+}
 pub struct Options {
     pub folder: String,
     pub output: PathBuf,
@@ -252,6 +262,30 @@ impl View {
         self.filter.clear();
         self.selection.select(Some(0));
         self.set_entries(files, Some(left));
+        self.loading = true;
+    }
+    fn next_root(&self, forward: bool) -> (&'static str, &'static str) {
+        let current = self
+            .path
+            .first()
+            .map(|(id, _)| id.as_str())
+            .unwrap_or("root");
+        let index = ROOTS.iter().position(|(id, _)| *id == current).unwrap_or(0);
+        let next = if forward {
+            (index + 1) % ROOTS.len()
+        } else {
+            (index + ROOTS.len() - 1) % ROOTS.len()
+        };
+        ROOTS[next]
+    }
+    fn set_root(&mut self, root: (&str, &str), files: Vec<File>) {
+        self.path = vec![(root.0.into(), root.1.into())];
+        self.parent.clear();
+        self.filter.clear();
+        self.preview.clear();
+        self.preview_id = None;
+        self.selection.select(Some(0));
+        self.set_entries(files, None);
         self.loading = true;
     }
     fn move_to(&mut self, index: isize) {
@@ -783,10 +817,9 @@ fn event_loop(terminal: &mut ratatui::DefaultTerminal, api: Api, options: Option
     let (tx, rx) = mpsc::channel();
     let db = Store::open(&api.db)?;
     let initial = api.cached(&options.folder)?;
-    let folder_name = if options.folder == "root" {
-        "My Drive".to_owned()
-    } else {
-        api.metadata(&options.folder)?.name
+    let folder_name = match root_title(&options.folder) {
+        Some(title) => title.to_owned(),
+        None => api.metadata(&options.folder)?.name,
     };
     let mut view = View::new(
         (options.folder.clone(), folder_name),
@@ -968,6 +1001,12 @@ fn event_loop(terminal: &mut ratatui::DefaultTerminal, api: Api, options: Option
                         view.leave(files, parent);
                         fetch(&api, &tx, id, false);
                     }
+                }
+                KeyCode::Tab | KeyCode::BackTab => {
+                    let root = view.next_root(key.code == KeyCode::Tab);
+                    let files = api.cached(root.0).unwrap_or_default();
+                    view.set_root(root, files);
+                    fetch(&api, &tx, root.0.to_owned(), false);
                 }
                 KeyCode::Char('r') if ctrl => {
                     view.loading = true;
@@ -1234,6 +1273,12 @@ mod tests {
         assert!(rows[0].contains("My Drive") && rows[0].contains("Photos"));
         view.leave(files, vec![]);
         assert_eq!(view.selected().unwrap().id, "p");
+        let next = view.next_root(true);
+        assert_eq!(next, ("drives", "Shared Drives"));
+        view.set_root(next, vec![file("d1", "Team", DIR)]);
+        assert_eq!(view.folder(), "drives");
+        assert_eq!(view.next_root(true), ("shared", "Shared with me"));
+        assert_eq!(view.next_root(false), ("root", "My Drive"));
     }
     #[test]
     fn yank_uses_marks_and_escape_steps_back() {
